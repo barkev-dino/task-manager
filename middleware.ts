@@ -1,7 +1,7 @@
-import { createServerClient, type CookieMethodsServer } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-type CookiesToSet = Parameters<CookieMethodsServer["setAll"]>[0];
+type CookiesToSet = { name: string; value: string; options?: CookieOptions }[];
 
 // Protected routes — redirect to /login if no session
 const PROTECTED = ["/capture", "/tasks", "/dashboard"];

@@ -1,8 +1,8 @@
-import { createServerClient, type CookieMethodsServer } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
-type CookiesToSet = Parameters<CookieMethodsServer["setAll"]>[0];
+type CookiesToSet = { name: string; value: string; options?: CookieOptions }[];
 
 // Server-only Supabase client for Server Components and API routes.
 // Never import this in client components.
