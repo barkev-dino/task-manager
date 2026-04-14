@@ -52,7 +52,7 @@ function nextWeekday(match: string): string {
   const target = days.findIndex((d) => match.toLowerCase().includes(d));
   if (target === -1) return todayPlus(7);
   const today = new Date().getDay();
-  let diff = (target - today + 7) % 7 || 7;
+  const diff = (target - today + 7) % 7 || 7;
   return todayPlus(diff);
 }
 
@@ -91,10 +91,6 @@ function guessAssignee(sentence: string): string | null {
     if (m) return m[1] || m[2] || null;
   }
   return null;
-}
-
-function isActionSentence(sentence: string): boolean {
-  return ACTION_PATTERNS.some((p) => p.test(sentence));
 }
 
 function scoreConfidence(sentence: string, matchCount: number): number {
