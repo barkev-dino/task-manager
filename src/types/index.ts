@@ -42,6 +42,7 @@ export interface Task {
   source_text: string | null;
   confidence: number | null;
   is_blocked: boolean;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 }

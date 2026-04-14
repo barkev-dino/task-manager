@@ -25,7 +25,7 @@ export default async function TasksPage() {
         `)
         .eq("assignee_id", user.id)
         .neq("status", "cancelled")
-        .order("created_at", { ascending: false }),
+        .order("sort_order", { ascending: true }),
       supabase.from("profiles").select("id, full_name, email").order("full_name"),
       supabase.from("teams").select("id, name").order("name"),
     ]);

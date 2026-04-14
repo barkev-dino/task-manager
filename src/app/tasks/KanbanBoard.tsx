@@ -29,13 +29,19 @@ const PRIORITY_DOT: Record<TaskPriority, string> = {
   low:    "bg-gray-300",
 };
 
-// ─── Props ────────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Props {
   initialTasks: TaskWithRelations[];
   userId: string;
   profiles: { id: string; full_name: string | null; email: string }[];
   teams: { id: string; name: string }[];
+}
+
+// Tracks where the drop-insert line should appear while dragging over a card
+interface InsertIndicator {
+  taskId: string;
+  edge: "top" | "bottom";
 }
 
 // ─── Board ────────────────────────────────────────────────────────────────────
@@ -49,31 +55,115 @@ export default function KanbanBoard({ initialTasks, userId, profiles, teams }: P
   );
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<TaskStatus | null>(null);
+  const [insertIndicator, setInsertIndicator] = useState<InsertIndicator | null>(null);
 
-  async function updateStatus(taskId: string, newStatus: TaskStatus) {
-    // Optimistic update first for instant feedback
-    setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
-    );
-    await supabase.from("tasks").update({ status: newStatus }).eq("id", taskId);
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  function getColumnTasks(status: TaskStatus): TaskWithRelations[] {
+    return tasks
+      .filter((t) => t.status === status)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   }
 
-  function handleDrop(e: React.DragEvent, status: TaskStatus) {
+  // Reassign evenly spaced sort_orders for all tasks in a column and persist changes.
+  function persistColumnOrder(reordered: TaskWithRelations[], newStatus: TaskStatus) {
+    const updates = reordered.map((t, i) => ({
+      id: t.id,
+      sort_order: (i + 1) * 1000,
+      status: newStatus,
+    }));
+
+    // Optimistic state update
+    const orderMap = new Map(updates.map((u) => [u.id, u]));
+    setTasks((prev) =>
+      prev.map((t) => {
+        const upd = orderMap.get(t.id);
+        return upd ? { ...t, sort_order: upd.sort_order, status: upd.status } : t;
+      })
+    );
+
+    // Persist each changed task (fire-and-forget; small N per column)
+    updates.forEach(({ id, sort_order, status }) => {
+      supabase
+        .from("tasks")
+        .update({ sort_order, status })
+        .eq("id", id)
+        .then(() => {});
+    });
+  }
+
+  // ── Drop onto a card — handles both within-column reorder and cross-column ──
+
+  function handleDropOnCard(
+    e: React.DragEvent<HTMLDivElement>,
+    targetTaskId: string
+  ) {
     e.preventDefault();
-    const taskId = e.dataTransfer.getData("taskId");
-    if (taskId && taskId !== "") updateStatus(taskId, status);
+    e.stopPropagation(); // Don't bubble to column drop handler
+
+    const sourceId = e.dataTransfer.getData("taskId");
+    if (!sourceId || sourceId === targetTaskId) {
+      clearDragState();
+      return;
+    }
+
+    const targetTask = tasks.find((t) => t.id === targetTaskId);
+    if (!targetTask) { clearDragState(); return; }
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const insertBefore = e.clientY < rect.top + rect.height / 2;
+    const targetStatus = targetTask.status;
+
+    // Build the new column order: take all tasks in targetStatus (excluding source),
+    // then splice the source task in at the correct position.
+    const colWithout = tasks
+      .filter((t) => t.status === targetStatus && t.id !== sourceId)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+
+    const targetIdx = colWithout.findIndex((t) => t.id === targetTaskId);
+    const spliceIdx = insertBefore ? targetIdx : targetIdx + 1;
+
+    const sourceTask = tasks.find((t) => t.id === sourceId)!;
+    const reordered = [
+      ...colWithout.slice(0, spliceIdx),
+      { ...sourceTask, status: targetStatus },
+      ...colWithout.slice(spliceIdx),
+    ];
+
+    persistColumnOrder(reordered, targetStatus);
+    clearDragState();
+  }
+
+  // ── Drop onto a column background (empty column or below all cards) ──────────
+
+  function handleDropOnColumn(e: React.DragEvent<HTMLDivElement>, status: TaskStatus) {
+    e.preventDefault();
+    const sourceId = e.dataTransfer.getData("taskId");
+    if (!sourceId) { clearDragState(); return; }
+
+    // Append to end of column
+    const colWithout = tasks
+      .filter((t) => t.status === status && t.id !== sourceId)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+
+    const sourceTask = tasks.find((t) => t.id === sourceId)!;
+    persistColumnOrder([...colWithout, { ...sourceTask, status }], status);
+    clearDragState();
+  }
+
+  function clearDragState() {
     setDraggingId(null);
     setDragOverCol(null);
+    setInsertIndicator(null);
   }
+
+  // ── Column visibility toggle ─────────────────────────────────────────────────
 
   function toggleColumn(status: TaskStatus) {
     setVisibleStatuses((prev) => {
       const next = new Set(prev);
-      if (next.has(status) && next.size > 1) {
-        next.delete(status);
-      } else {
-        next.add(status);
-      }
+      if (next.has(status) && next.size > 1) next.delete(status);
+      else next.add(status);
       return next;
     });
   }
@@ -83,11 +173,13 @@ export default function KanbanBoard({ initialTasks, userId, profiles, teams }: P
     setEditingTask(null);
   }
 
+  // ── Render ──────────────────────────────────────────────────────────────────
+
   const visibleColumns = COLUMNS.filter((c) => visibleStatuses.has(c.id));
 
   return (
     <>
-      {/* ── Status filter ──────────────────────────────────────── */}
+      {/* Status filter */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs font-medium text-gray-400 mr-1">Filter:</span>
         {COLUMNS.map((col) => {
@@ -112,7 +204,7 @@ export default function KanbanBoard({ initialTasks, userId, profiles, teams }: P
         })}
       </div>
 
-      {/* ── Board ──────────────────────────────────────────────── */}
+      {/* Board */}
       {tasks.length === 0 ? (
         <div className="text-center py-24 text-gray-400">
           <p className="text-lg">No tasks yet.</p>
@@ -123,21 +215,24 @@ export default function KanbanBoard({ initialTasks, userId, profiles, teams }: P
       ) : (
         <div className="flex gap-4 overflow-x-auto pb-6 items-start">
           {visibleColumns.map((col) => {
-            const colTasks = tasks.filter((t) => t.status === col.id);
-            const isOver = dragOverCol === col.id;
+            const colTasks = getColumnTasks(col.id);
+            const isOver = dragOverCol === col.id && insertIndicator === null;
 
             return (
               <div
                 key={col.id}
                 className="flex-shrink-0 w-72"
-                onDragOver={(e) => { e.preventDefault(); setDragOverCol(col.id); }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  // Only set column highlight when not hovering a card
+                  if (!insertIndicator) setDragOverCol(col.id);
+                }}
                 onDragLeave={(e) => {
-                  // Only clear if leaving the column entirely (not a child)
                   if (!e.currentTarget.contains(e.relatedTarget as Node)) {
                     setDragOverCol(null);
                   }
                 }}
-                onDrop={(e) => handleDrop(e, col.id)}
+                onDrop={(e) => handleDropOnColumn(e, col.id)}
               >
                 {/* Column header */}
                 <div className={`flex items-center justify-between mb-3 pb-2 border-b-2 ${col.border}`}>
@@ -149,29 +244,64 @@ export default function KanbanBoard({ initialTasks, userId, profiles, teams }: P
 
                 {/* Drop zone */}
                 <div
-                  className={`min-h-24 rounded-xl space-y-2 p-1 transition-colors ${
+                  className={`min-h-24 rounded-xl p-1 transition-colors space-y-0 ${
                     isOver ? "bg-indigo-50 ring-1 ring-indigo-200 ring-inset" : ""
                   }`}
                 >
                   {colTasks.map((task) => (
-                    <KanbanCard
-                      key={task.id}
-                      task={task}
-                      isDragging={draggingId === task.id}
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData("taskId", task.id);
-                        e.dataTransfer.effectAllowed = "move";
-                        setDraggingId(task.id);
-                      }}
-                      onDragEnd={() => { setDraggingId(null); setDragOverCol(null); }}
-                      onClick={() => setEditingTask(task)}
-                    />
+                    <div key={task.id}>
+                      {/* Insert line ABOVE this card */}
+                      <InsertLine
+                        show={
+                          insertIndicator?.taskId === task.id &&
+                          insertIndicator.edge === "top"
+                        }
+                      />
+
+                      <KanbanCard
+                        task={task}
+                        isDragging={draggingId === task.id}
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData("taskId", task.id);
+                          e.dataTransfer.effectAllowed = "move";
+                          setDraggingId(task.id);
+                        }}
+                        onDragEnd={clearDragState}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setDragOverCol(null); // suppress column highlight when over a card
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const edge: "top" | "bottom" =
+                            e.clientY < rect.top + rect.height / 2 ? "top" : "bottom";
+                          setInsertIndicator({ taskId: task.id, edge });
+                        }}
+                        onDragLeave={(e) => {
+                          // Clear only if leaving this card entirely
+                          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                            setInsertIndicator(null);
+                          }
+                        }}
+                        onDrop={(e) => handleDropOnCard(e, task.id)}
+                        onClick={() => setEditingTask(task)}
+                      />
+
+                      {/* Insert line BELOW this card */}
+                      <InsertLine
+                        show={
+                          insertIndicator?.taskId === task.id &&
+                          insertIndicator.edge === "bottom"
+                        }
+                      />
+                    </div>
                   ))}
 
                   {colTasks.length === 0 && (
-                    <p className={`text-xs text-center py-8 transition-colors ${
-                      isOver ? "text-indigo-300" : "text-gray-200"
-                    }`}>
+                    <p
+                      className={`text-xs text-center py-8 transition-colors ${
+                        isOver ? "text-indigo-300" : "text-gray-200"
+                      }`}
+                    >
                       {isOver ? "Drop here" : "Empty"}
                     </p>
                   )}
@@ -182,7 +312,7 @@ export default function KanbanBoard({ initialTasks, userId, profiles, teams }: P
         </div>
       )}
 
-      {/* ── Edit modal ─────────────────────────────────────────── */}
+      {/* Edit modal */}
       {editingTask && (
         <TaskEditModal
           task={editingTask}
@@ -197,20 +327,41 @@ export default function KanbanBoard({ initialTasks, userId, profiles, teams }: P
   );
 }
 
+// ─── Insert line indicator ────────────────────────────────────────────────────
+
+function InsertLine({ show }: { show: boolean }) {
+  if (!show) return null;
+  return (
+    <div className="h-0.5 mx-1 my-0.5 bg-indigo-500 rounded-full pointer-events-none" />
+  );
+}
+
 // ─── Kanban Card ─────────────────────────────────────────────────────────────
 
 interface KanbanCardProps {
   task: TaskWithRelations;
   isDragging: boolean;
-  onDragStart: (e: React.DragEvent) => void;
+  onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragEnd: () => void;
+  onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragLeave: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
   onClick: () => void;
 }
 
-function KanbanCard({ task, isDragging, onDragStart, onDragEnd, onClick }: KanbanCardProps) {
+function KanbanCard({
+  task,
+  isDragging,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onClick,
+}: KanbanCardProps) {
   const today = new Date().toISOString().split("T")[0];
   const isOverdue = task.due_date && task.due_date < today && task.status !== "done";
-  // Track whether we actually dragged so we don't fire onClick after a drop
+  // Distinguish a click from the end of a drag
   const didDragRef = useRef(false);
 
   return (
@@ -219,10 +370,13 @@ function KanbanCard({ task, isDragging, onDragStart, onDragEnd, onClick }: Kanba
       onDragStart={(e) => { didDragRef.current = false; onDragStart(e); }}
       onDrag={() => { didDragRef.current = true; }}
       onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       onClick={() => { if (!didDragRef.current) onClick(); didDragRef.current = false; }}
       className={`bg-white border border-l-4 ${PRIORITY_BORDER[task.priority]} border-gray-200
         rounded-lg p-3 cursor-grab active:cursor-grabbing hover:shadow-sm
-        transition-all select-none group
+        transition-all select-none
         ${isDragging ? "opacity-40 scale-95" : "opacity-100"}`}
     >
       {/* Priority dot + title */}
@@ -242,12 +396,12 @@ function KanbanCard({ task, isDragging, onDragStart, onDragEnd, onClick }: Kanba
 
       {/* Assignee */}
       {task.assignee && (
-        <p className="text-xs text-gray-500 mt-1.5 ml-4">
+        <p className="text-xs text-gray-500 mt-1 ml-4">
           {task.assignee.full_name ?? task.assignee.email}
         </p>
       )}
 
-      {/* Footer */}
+      {/* Footer: due date / blocked + age */}
       <div className="mt-2.5 ml-4 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-xs">
           {task.due_date && (
@@ -260,8 +414,10 @@ function KanbanCard({ task, isDragging, onDragStart, onDragEnd, onClick }: Kanba
             <span className="text-orange-500 font-medium">Blocked</span>
           )}
         </div>
-        {/* Age + activity */}
-        <div className="flex items-center gap-1 text-xs text-gray-300 shrink-0" title={`Created ${ageLabel(task.created_at)} · Updated ${ageLabel(task.updated_at)}`}>
+        <div
+          className="flex items-center gap-1 text-xs text-gray-300 shrink-0"
+          title={`Created ${ageLabel(task.created_at)} · Updated ${ageLabel(task.updated_at)}`}
+        >
           <span>+{ageLabel(task.created_at)}</span>
           {task.updated_at !== task.created_at && (
             <span>· {ageLabel(task.updated_at)}</span>
