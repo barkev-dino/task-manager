@@ -2,10 +2,8 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
-  const router = useRouter();
   const supabase = createClient();
 
   const [email, setEmail] = useState("");
@@ -24,8 +22,9 @@ export default function LoginPage() {
       if (error) {
         setMessage({ type: "error", text: error.message });
       } else {
-        router.push("/capture");
-        router.refresh();
+        // Full page navigation ensures the new session cookies are sent
+        // on the next request — router.push() races with cookie writes.
+        window.location.href = "/capture";
       }
     } else {
       const { error } = await supabase.auth.signUp({
