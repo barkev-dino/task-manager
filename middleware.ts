@@ -30,7 +30,16 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  const { data: { user } } = await supabase.auth.getUser();
+  // Wrap in try/catch so a network error (e.g. corporate TLS proxy)
+  // doesn't silently block every protected route.
+  let user = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    user = data.user;
+  } catch (err) {
+    console.error("[middleware] supabase.auth.getUser failed:", err);
+    // Allow the request through — the page-level auth check will catch it.
+  }
 
   const pathname = request.nextUrl.pathname;
   const isProtected = PROTECTED.some((p) => pathname.startsWith(p));
