@@ -80,10 +80,10 @@ export default function TaskForm({ draft, teams, profiles, onChange }: Props) {
 
       {/* Form grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {/* Team — required */}
+        {/* Team */}
         <div>
           <label className="block text-xs font-medium text-gray-500 mb-1">
-            Team <span className="text-red-400">*</span>
+            Team
           </label>
           <select
             value={draft.team_id ?? ""}

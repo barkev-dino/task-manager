@@ -46,6 +46,16 @@ export interface Task {
   updated_at: string;
 }
 
+export interface TaskComment {
+  id: string;
+  task_id: string;
+  author_id: string | null;
+  body: string;
+  created_at: string;
+  // joined
+  author?: { full_name: string | null; email: string } | null;
+}
+
 export interface IntakeEvent {
   id: string;
   submitted_by: string | null;

@@ -72,7 +72,6 @@ function candidateToDraft(c: CandidateTask, idx: number): TaskDraft {
 function isDraftComplete(d: TaskDraft): boolean {
   return (
     d.title.trim() !== "" &&
-    d.team_id !== null &&
     d.estimated_effort_hours !== null &&
     d.estimated_effort_hours > 0
   );
