@@ -2,6 +2,8 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import CaptureClient from "./CaptureClient";
 
+export const dynamic = "force-dynamic";
+
 export default async function CapturePage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
